@@ -52,6 +52,27 @@ async fn create(app: &App, session: &str, csrf: &str, source_id: i64, slug: &str
     value(response).await["id"].as_i64().unwrap()
 }
 #[tokio::test]
+async fn login_rejects_empty_preauth_cookie_and_csrf() {
+    let (_dir, app, _session, _csrf) = fixture().await;
+    let body = json!({"secret":"local test phrase only"}).to_string();
+    let response = router(app.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/login")
+                .header(header::COOKIE, "gateway_preauth=")
+                .header(header::ORIGIN, "http://localhost:4387")
+                .header("x-csrf-token", "")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    app.db.close().await;
+}
+#[tokio::test]
 async fn authentication_csrf_and_state_do_not_reveal_tokens() {
     let (_dir, app, session, csrf) = fixture().await;
     let response = router(app.clone())

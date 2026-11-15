@@ -85,6 +85,12 @@
 - 订阅来源限制在反代层：中国大陆 IPv4 + 现有节点出口。实测同一验证分享从节点出口 200、从美国主机 404；未认证后台仍被断开。**未用真实中国大陆家宽实测**，需在境内手机网络确认一次。
 - Linux 重新构建：`cargo test --release --locked` 26 passed；二进制 5,215,120 字节，SHA-256 `6864ec51ef65db881c791d0b6f7d779ec3634f513866ffd8ce9b239f92ddf9c4`，安装后校验一致；服务重启后 `NRestarts=0`。
 
+## 2026-11-15 安全加固：登录预认证空值
+
+- `cookie()` 现在拒绝空 Cookie 值；登录时同时带空 `__Host-gateway_preauth` Cookie 和空 `X-CSRF-Token` 会直接返回 403，不再进入口令校验。新增回归测试。
+- 独立构建机构建：`cargo test --release --locked` **27 passed**；产物 5,215,120 字节，SHA-256 `f0a7a0829d6bcee9de8046d872dc9d2b112a376d477f2c6d168ca1afbfcc1ed3`，安装后核对一致。
+- 生产 HTTPS 实测：空预认证 Cookie 请求 403；正常登录 200、管理页 200；服务 active、`NRestarts=0`。
+
 ## 未执行 / 保留边界
 
 - 完整运行时 Dockerfile / Compose 部署；本次只用容器构建、原生运行。

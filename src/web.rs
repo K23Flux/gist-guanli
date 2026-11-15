@@ -140,7 +140,7 @@ fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
         .filter_map(|s| s.trim().split_once('='))
         .find(|(k, _)| *k == name)
         .map(|(_, v)| v.to_string())
-        .filter(|v| v.len() <= 128)
+        .filter(|v| !v.is_empty() && v.len() <= 128)
 }
 fn session_name(dev: bool) -> &'static str {
     if dev {
