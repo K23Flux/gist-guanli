@@ -26,8 +26,10 @@ pub enum Command {
     Serve {
         #[arg(long, env = "GATEWAY_BIND", default_value = "127.0.0.1:4387")]
         bind: SocketAddr,
-        #[arg(long, env = "GATEWAY_DEV")]
+        #[arg(long)]
         dev: bool,
+        #[arg(long, env = "GATEWAY_TRUST_PROXY")]
+        trust_proxy: bool,
     },
 }
 pub fn normalize_base(input: &str, dev: bool) -> Result<String> {
@@ -44,8 +46,12 @@ pub fn normalize_base(input: &str, dev: bool) -> Result<String> {
     {
         bail!("对外地址只能包含协议、主机和端口");
     }
-    if u.scheme() != "https" && !(dev && loopback && u.scheme() == "http") {
-        bail!("生产对外地址必须使用 HTTPS；本机 HTTP 需要 --dev");
+    if dev {
+        if !(loopback && u.scheme() == "http") {
+            bail!("开发模式只允许 http://localhost/127.0.0.1/[::1] 的对外地址");
+        }
+    } else if u.scheme() != "https" {
+        bail!("生产对外地址必须使用 HTTPS");
     }
     if u.host_str().is_none() {
         bail!("对外地址缺少主机");
@@ -62,6 +68,7 @@ mod tests {
             "https://sub.example.com"
         );
         assert!(normalize_base("http://example.com", true).is_err());
+        assert!(normalize_base("https://sub.example.com", true).is_err());
         assert!(normalize_base("https://u:p@example.com", false).is_err());
         assert!(normalize_base("https://example.com/a", false).is_err());
         assert!(normalize_base("http://127.0.0.1:4387", true).is_ok());

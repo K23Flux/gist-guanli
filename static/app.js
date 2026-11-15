@@ -332,7 +332,7 @@
   function sourceForm(source = null) {
     if (!openDialog(source ? '编辑 Gist 来源' : '添加 Gist 来源', '解析地址并确认文件，配置内容仍在 Gist 维护。')) return;
     const form = mountForm();
-    const name = field(form, '来源名称', 'name', { required: true, value: source?.name || '', placeholder: '例如：常用订阅', maxLength: 120 });
+    const name = field(form, '来源名称', 'name', { required: true, value: source?.name || '', placeholder: '例如：常用订阅', maxLength: 80 });
     const canonical = source ? `https://gist.githubusercontent.com/${enc(source.owner)}/${enc(source.gist_id)}/raw/${enc(source.filename)}` : '';
     const url = field(form, 'Gist 页面或 raw 地址', 'url', { type: 'url', required: true, value: canonical, placeholder: 'https://gist.github.com/…', help: source ? '为保护原始地址，这里使用规范化 raw 地址。保存前请重新解析并确认；来源将跟随最新版。' : '支持 Gist 页面及 raw 文件地址。解析后选择要接入的文件。' });
     const inspectButton = button('解析地址', 'button secondary');
@@ -390,6 +390,9 @@
       const items = [...new Set(urls.value.split(/\r?\n/).map(value => value.trim()).filter(Boolean))];
       if (!items.length) throw new Error('请至少填写一个 raw 地址。');
       if (items.length > 50) throw new Error('每次最多导入 50 个地址，请分批处理。');
+      if (new TextEncoder().encode(JSON.stringify({ urls: items })).length > 120 * 1024) {
+        throw new Error('本批地址总长度过大，请减少条数或分批处理。');
+      }
       for (const item of items) {
         let parsed;
         try { parsed = new URL(item); } catch { throw new Error('存在格式不正确的地址，请检查后重试。'); }
@@ -408,10 +411,17 @@
         row.append(node('strong', '', item.ok ? '已导入' : '未导入'), node('div', '', item.name || item.url || '来源'), node('div', 'cell-detail', item.ok ? '可以为此来源创建分享。' : item.error || '请检查地址后重试。'));
         results.append(row);
       });
-      urls.value = data.results.filter(item => !item.ok && item.url).map(item => item.url).join('\n');
+      const failed = data.results.filter(item => !item.ok);
+      urls.value = failed.map(item => item.url).filter(Boolean).join('\n');
       toast(`已导入 ${successes} 个来源，${data.results.length - successes} 个未导入`, successes !== data.results.length);
       await loadState();
-      if (!urls.value) { urls.required = false; urls.placeholder = '导入已完成。可继续粘贴下一批 raw 地址。'; }
+      if (!failed.length) {
+        urls.required = false;
+        urls.placeholder = '导入已完成。可继续粘贴下一批 raw 地址。';
+      } else {
+        urls.required = true;
+        urls.placeholder = '未导入的地址已保留，请修正后重试。';
+      }
     });
     urls.focus();
   }
@@ -470,6 +480,7 @@
         if (typeof data.url !== 'string') throw new Error('未能取得分享地址，请稍后重试。');
         const parsed = new URL(data.url, location.origin);
         if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('分享地址格式有误，请检查网关设置。');
+        if (parsed.origin !== location.origin) throw new Error('分享地址与当前站点不一致，请检查网关设置。');
         if (!openDialog('分享链接', share.label || '未命名分享')) return;
         const content = node('div', 'reveal-content');
         const input = node('input'); input.type = 'text'; input.readOnly = true; input.value = data.url;
@@ -530,6 +541,7 @@
     const baseURL = $('#base-url').value.trim();
     const parsed = new URL(baseURL);
     if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed['pass' + 'word'] || parsed.search || parsed.hash) throw new Error('请填写不含账号、查询参数或片段的 HTTP / HTTPS 地址。');
+    if (parsed.origin !== location.origin) throw new Error('对外地址必须与当前访问域名一致；如需迁移域名，请先在反代和数据库中完成切换。');
     const ttl = Number($('#cache-ttl').value);
     if (!Number.isSafeInteger(ttl) || ttl < 10 || ttl > 3600) throw new Error('缓存有效期必须是 10 至 3600 秒之间的整数。');
     await api('/api/admin/settings', 'PUT', { base_url: baseURL, cache_ttl_secs: ttl });

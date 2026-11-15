@@ -61,11 +61,16 @@ async fn run(cli: Cli) -> Result<()> {
             db.close().await;
             println!("初始化完成。请分别备份数据库与 master.key；未启动任何监听。");
         }
-        Command::Serve { bind, dev } => {
+        Command::Serve {
+            bind,
+            dev,
+            trust_proxy,
+        } => {
             if dev && !bind.ip().is_loopback() {
                 bail!("开发模式只能绑定本机回环地址");
             }
-            let app = store::App::load(&cli.data_dir, dev).await?;
+            let mut app = store::App::load(&cli.data_dir, dev).await?;
+            app.trust_proxy = trust_proxy;
             config::normalize_base(&app.settings().await?.base_url, dev)?;
             let router = web::router(app.clone());
             let listener = tokio::net::TcpListener::bind(bind)

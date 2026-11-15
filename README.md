@@ -59,7 +59,7 @@ cargo build --locked --release
 ./target/release/gist-gateway --data-dir ./var serve --dev --bind 127.0.0.1:4387
 ```
 
-访问 `http://localhost:4387/admin`。请保持与初始化时的主机名一致，不能把 localhost 和 127.0.0.1 混用后再提交操作。同源校验使用数据库中设置的对外地址，不信任请求 Host 或任意转发头。
+访问 `http://localhost:4387/admin`。请保持与初始化时的主机名一致，不能把 localhost 和 127.0.0.1 混用后再提交操作。同源校验使用数据库中设置的对外地址，不信任请求 Host 或任意转发头。`--dev` 只接受 `http://localhost`、`http://127.0.0.1` 或 `http://[::1]` 的对外地址；生产 HTTPS 地址不能用 `--dev` 启动。
 
 `--secret-stdin` 可从标准输入读取初始化口令，供本地自动化使用；不要把真实口令写在命令参数、脚本源码或终端历史中。Windows 产物扩展名为 `.exe`。本次隔离安装的工具链位于忽略目录 `.tools/`，不纳入仓库。
 

@@ -17,6 +17,11 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
 
+const MAX_REQUEST_BYTES: usize = 128 * 1024;
+const MAX_URL_BYTES: usize = 2048;
+const BATCH_BUDGET_SECS: u64 = 90;
+const MAX_EXPIRY_DAYS: i64 = 3650;
+
 #[derive(Template)]
 #[template(path = "login.html")]
 struct LoginTemplate<'a> {
@@ -69,6 +74,7 @@ fn upstream_error() -> ApiError {
 }
 
 pub fn router(app: App) -> Router {
+    let dev = app.dev;
     Router::new()
         .route("/", get(|| async { Redirect::to("/admin") }))
         .route("/healthz", get(|| async { Json(json!({"status":"ok"})) }))
@@ -118,17 +124,26 @@ pub fn router(app: App) -> Router {
         .route("/api/admin/credentials", post(change_secret))
         .route("/s/{slug}/{token}/{filename}", get(subscription))
         .fallback(|| async { missing() })
-        .layer(DefaultBodyLimit::max(64 * 1024))
-        .layer(middleware::from_fn(security_headers))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
+        .layer(middleware::from_fn(move |request, next| {
+            security_headers(dev, request, next)
+        }))
         .with_state(app)
 }
-async fn security_headers(request: axum::extract::Request, next: Next) -> Response {
+async fn security_headers(dev: bool, request: axum::extract::Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     for(k,v) in [
   ("cache-control","no-store"),("referrer-policy","no-referrer"),("x-content-type-options","nosniff"),
   ("x-frame-options","DENY"),("permissions-policy","camera=(), microphone=(), geolocation=()"),
+  ("cross-origin-resource-policy","same-origin"),("x-robots-tag","noindex, nofollow"),
   ("content-security-policy","default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'"),
  ]{response.headers_mut().insert(axum::http::HeaderName::from_static(k),HeaderValue::from_static(v));}
+    if !dev {
+        response.headers_mut().insert(
+            axum::http::HeaderName::from_static("strict-transport-security"),
+            HeaderValue::from_static("max-age=31536000"),
+        );
+    }
     response
 }
 fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -141,6 +156,29 @@ fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
         .find(|(k, _)| *k == name)
         .map(|(_, v)| v.to_string())
         .filter(|v| !v.is_empty() && v.len() <= 128)
+}
+fn client_key(headers: &HeaderMap, trust_proxy: bool) -> String {
+    if trust_proxy {
+        if let Some(value) = headers
+            .get("x-forwarded-for")
+            .and_then(|value| value.to_str().ok())
+        {
+            if let Some(first) = value.split(',').next() {
+                if let Ok(ip) = first.trim().parse::<std::net::IpAddr>() {
+                    return ip.to_string();
+                }
+            }
+        }
+        if let Some(value) = headers
+            .get("x-real-ip")
+            .and_then(|value| value.to_str().ok())
+        {
+            if let Ok(ip) = value.trim().parse::<std::net::IpAddr>() {
+                return ip.to_string();
+            }
+        }
+    }
+    "direct".to_owned()
 }
 fn session_name(dev: bool) -> &'static str {
     if dev {
@@ -225,21 +263,27 @@ async fn login(
     if !crypto::matches(csrf, &crypto::digest(&pre)) {
         return Err(ApiError(StatusCode::FORBIDDEN, "请刷新登录页"));
     }
+    let client = client_key(&headers, app.trust_proxy);
     let _permit = app
         .login_gate
         .clone()
         .try_acquire_owned()
         .map_err(|_| ApiError(StatusCode::TOO_MANY_REQUESTS, "正在处理登录，请稍后重试"))?;
     {
-        let mut times = app.attempts.lock().await;
-        times.retain(|t| *t > store::now() - 300);
+        let now = store::now();
+        let mut attempts = app.attempts.lock().await;
+        attempts.retain(|_, times| {
+            times.retain(|t| *t > now - 300);
+            !times.is_empty()
+        });
+        let times = attempts.entry(client.clone()).or_default();
         if times.len() >= 5 {
             return Err(ApiError(
                 StatusCode::TOO_MANY_REQUESTS,
                 "登录尝试过多，请 5 分钟后重试",
             ));
         }
-        times.push(store::now());
+        times.push(now);
     }
     if input.secret.len() > 1024 {
         return Err(bad("口令过长"));
@@ -253,7 +297,7 @@ async fn login(
     if !valid {
         return Err(ApiError(StatusCode::UNAUTHORIZED, "口令不正确"));
     }
-    app.attempts.lock().await.clear();
+    app.attempts.lock().await.remove(&client);
     let token = crypto::random_token();
     let csrf = crypto::random_token();
     let mut tx = app.db.begin().await?;
@@ -358,7 +402,7 @@ fn short_text(value: &str, max: usize) -> bool {
     !value.trim().is_empty() && value.chars().count() <= max && !value.chars().any(char::is_control)
 }
 async fn checked_source(app: &App, input: &SourceInput) -> ApiResult<GistRef> {
-    if !short_text(&input.name, 80) || input.url.len() > 2048 {
+    if !short_text(&input.name, 80) || input.url.len() > MAX_URL_BYTES {
         return Err(bad("名称应为 1～80 个字符，Gist 地址最长 2048 字节"));
     }
     let result = app
@@ -497,19 +541,28 @@ async fn batch_sources(
     if input.urls.is_empty() || input.urls.len() > 50 {
         return Err(bad("每批请输入 1～50 条 raw 地址"));
     }
-    let mut results = Vec::new();
+    let mut results = Vec::with_capacity(input.urls.len());
     let started = std::time::Instant::now();
+    let mut over_budget = false;
     for raw in input.urls {
-        if started.elapsed() > std::time::Duration::from_secs(100) {
-            results.push(json!({"ok":false,"error":"本批等待时间较长，未处理的地址请分批重试"}));
+        let raw = raw.trim().to_owned();
+        if over_budget || started.elapsed() > std::time::Duration::from_secs(BATCH_BUDGET_SECS) {
+            over_budget = true;
+            results.push(
+                json!({"ok":false,"url":raw,"error":"本批等待时间较长，未处理的地址请分批重试"}),
+            );
             continue;
         }
-        let input = match url::Url::parse(raw.trim()) {
+        if raw.len() > MAX_URL_BYTES {
+            results.push(json!({"ok":false,"url":raw,"error":"Gist 地址最长 2048 字节"}));
+            continue;
+        }
+        let input = match url::Url::parse(&raw) {
             Ok(url) if url.host_str() == Some("gist.githubusercontent.com") => {
-                match app.upstream.inspect(raw.trim()).await {
+                match app.upstream.inspect(&raw).await {
                     Ok(result) if !result.pinned => result.selected.map(|filename| SourceInput {
                         name: filename.clone(),
-                        url: raw.trim().to_owned(),
+                        url: raw.clone(),
                         filename,
                         follow_latest: false,
                     }),
@@ -521,11 +574,11 @@ async fn batch_sources(
         if let Some(input) = input {
             let name = input.name.clone();
             match insert_source(&app, input).await {
-                Ok(id) => results.push(json!({"ok":true,"id":id,"name":name})),
-                Err(e) => results.push(json!({"ok":false,"error":e.1})),
+                Ok(id) => results.push(json!({"ok":true,"id":id,"name":name,"url":raw})),
+                Err(e) => results.push(json!({"ok":false,"url":raw,"error":e.1})),
             }
         } else {
-            results.push(json!({"ok":false,"error":"请使用不固定版本的 raw 地址；多文件页面或历史版本请单条导入"}));
+            results.push(json!({"ok":false,"url":raw,"error":"请使用不固定版本的 raw 地址；多文件页面或历史版本请单条导入"}));
         }
     }
     Ok(Json(json!({"results":results})))
@@ -543,6 +596,10 @@ struct ShareInput {
 fn yes() -> bool {
     true
 }
+fn valid_expiry(value: Option<i64>) -> bool {
+    let now = store::now();
+    value.is_none_or(|t| t > now && t <= now.saturating_add(MAX_EXPIRY_DAYS * 86_400))
+}
 fn safe_segment(s: &str, max: usize) -> bool {
     !s.is_empty()
         && s.len() <= max
@@ -551,6 +608,9 @@ fn safe_segment(s: &str, max: usize) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || b"_- .".contains(&c) && c != b' ')
 }
 async fn default_share(app: &App, mut input: ShareInput) -> ApiResult<ShareInput> {
+    if !valid_expiry(input.expires_at) {
+        return Err(bad("到期时间需要是未来的有效时间"));
+    }
     let source = app
         .source(input.source_id)
         .await?
@@ -620,6 +680,16 @@ async fn update_share(
     Json(input): Json<ShareInput>,
 ) -> ApiResult<Json<Value>> {
     mutation(&app, &headers).await?;
+    let current_source: Option<i64> = sqlx::query_scalar("SELECT source_id FROM shares WHERE id=?")
+        .bind(id)
+        .fetch_optional(&app.db)
+        .await?;
+    let Some(current_source) = current_source else {
+        return Err(missing());
+    };
+    if input.source_id != current_source {
+        return Err(bad("分享来源不可更改；如需换源请新建分享"));
+    }
     let input = default_share(&app, input).await?;
     validate_share(&app, &input).await?;
     let r = sqlx::query(
@@ -834,7 +904,7 @@ async fn subscription(
             "当前更新请求较多，请稍后重试",
         )
     })?;
-    let ttl = app.settings().await?.cache_ttl_secs as u64;
+    let ttl = app.settings().await?.cache_ttl_secs.clamp(10, 3600) as u64;
     let bytes = match app
         .upstream
         .get(source.id, source.version, &source.gist(), ttl)

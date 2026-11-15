@@ -17,6 +17,8 @@
 
 管理页面和 `/api/admin/*` 可以沿用已有来源白名单；订阅 `/s/*` 使用分享令牌授权。不要为订阅删除其他后台或站点的白名单。不需要把 4387 暴露到公网，也不需要改变 SSH 或防火墙。
 
+若反代设置真实客户端 IP 头，启动服务时加 `--trust-proxy`（或 `GATEWAY_TRUST_PROXY=1`）；反代必须覆盖而不是追加客户端自带值，否则登录限速键可被伪造。未启用时所有直连请求共用一个限速键。
+
 ### 可选：订阅路径按来源地区限制
 
 如果订阅只给固定地区或自有节点使用，可以在反代对 `/s/*` 再加一层来源 IP 白名单，应用本身不需要改。做法是生成一个 Caddy 片段并在订阅 handler 里 `import`：
@@ -28,7 +30,7 @@ handle @gist_subscription {
 }
 ```
 
-片段内容为 `@gist_sub_not_allowed not remote_ip <允许的 IP/CIDR…>` 加 `respond @gist_sub_not_allowed 404`。地区列表可从 APNIC 委派数据生成，例如 `hosts/.../gist-gateway/cn-allow.py` 把中国大陆 IPv4 与现有 `allow_only` 节点合并；这类数据是部署专有的，不放进通用源码。用 `caddy validate` 校验后平滑 reload，并实测允许与拒绝两侧。
+片段内容为 `@gist_sub_not_allowed not remote_ip <允许的 IP/CIDR…>` 加 `respond @gist_sub_not_allowed 404`。地区列表可从 APNIC 委派数据生成；脚本、CIDR 和节点清单属于部署专有数据，放在私有运维记录，不放进通用源码。用 `caddy validate` 校验后平滑 reload，并实测允许与拒绝两侧。
 
 注意：
 
