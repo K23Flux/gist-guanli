@@ -39,7 +39,7 @@
 
 ## 本地构建与启动
 
-需要 Rust stable、系统 C 编译器（SQLite 与 TLS 依赖的构建需要）。应用没有 Node 前端构建步骤，HTML/CSS/JS 随二进制内置。`Cargo.lock` 固定依赖。
+需要 Rust stable、系统 C 编译器（SQLite 与 TLS 依赖的构建需要）。应用没有 Node 前端构建步骤，HTML/CSS/JS 随二进制内置。`Cargo.lock` 固定依赖。若按本项目约定在独立构建机上做 Linux 发布构建，见 [Linux 构建流程](deploy/build-linux.md)；该流程与服务器地址、私有凭据分开维护。
 
 在本目录构建：
 
