@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf }}">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="light">
+  <title>登录 · Gist 网关</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body data-page="login">
+  <main class="login-shell">
+    <section class="login-story" aria-label="关于 Gist 网关">
+      <a class="brand" href="/admin"><span class="brand-mark" aria-hidden="true">g/</span><span>Gist 网关</span></a>
+      <div class="login-intro">
+        <h1>一个来源，<br>分享有序。</h1>
+        <p>把 Gist 文件接入网关，<br>为不同用途保留独立的分享链接。</p>
+        <div class="route-example" aria-hidden="true"><span>Gist 文件</span><span class="route-line"></span><span>分享链接</span></div>
+      </div>
+      <p class="story-foot">内容留在 Gist，链接在这里管理。</p>
+    </section>
+    <section class="login-panel" aria-labelledby="login-title">
+      <div class="login-card">
+        <span class="section-icon" aria-hidden="true">↳</span>
+        <h2 id="login-title">登录管理台</h2>
+        <p class="muted">输入管理密码，继续管理来源与分享。</p>
+        <form id="login-form">
+          <label for="login-secret">管理密码</label>
+          <div class="secret-field"><input id="login-secret" name="secret" type="pass&#119;ord" autocomplete="current-pass&#119;ord" required autofocus><button type="button" class="secret-visibility" data-secret-target="login-secret" aria-label="显示管理密码" aria-pressed="false">显示</button></div>
+          <p id="login-error" class="form-error" role="alert" hidden></p>
+          <button type="submit" class="button primary wide">登录</button>
+        </form>
+        <p class="login-note">仅供管理员使用。分享链接无需登录。</p>
+        <noscript><p class="form-error">请启用 JavaScript 后登录。</p></noscript>
+      </div>
+    </section>
+  </main>
+  <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="false"></div>
+</body>
+</html>

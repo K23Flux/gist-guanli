@@ -1,0 +1,45 @@
+[Unit]
+Description=Gist subscription gateway
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=gistgw
+Group=gistgw
+WorkingDirectory=/opt/apps/gist-gateway
+ExecStart=/opt/apps/gist-gateway/bin/gist-gateway --data-dir /opt/apps/gist-gateway/data serve --bind 127.0.0.1:4387
+Restart=on-failure
+RestartSec=3
+# The application handles SIGINT and flushes pending statistics on shutdown.
+KillSignal=SIGINT
+TimeoutStopSec=25
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/apps/gist-gateway/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+MemoryHigh=96M
+MemoryMax=128M
+TasksMax=16
+LimitNOFILE=256
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

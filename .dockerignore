@@ -1,0 +1,9 @@
+target
+.tools
+var
+.git
+.env
+*.sqlite*
+*.key
+README.md
+VALIDATION.md
