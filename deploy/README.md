@@ -17,6 +17,26 @@
 
 管理页面和 `/api/admin/*` 可以沿用已有来源白名单；订阅 `/s/*` 使用分享令牌授权。不要为订阅删除其他后台或站点的白名单。不需要把 4387 暴露到公网，也不需要改变 SSH 或防火墙。
 
+### 可选：订阅路径按来源地区限制
+
+如果订阅只给固定地区或自有节点使用，可以在反代对 `/s/*` 再加一层来源 IP 白名单，应用本身不需要改。做法是生成一个 Caddy 片段并在订阅 handler 里 `import`：
+
+```caddyfile
+handle @gist_subscription {
+	import /etc/caddy/gist-subscription-allow.caddyfile
+	reverse_proxy 127.0.0.1:4387
+}
+```
+
+片段内容为 `@gist_sub_not_allowed not remote_ip <允许的 IP/CIDR…>` 加 `respond @gist_sub_not_allowed 404`。地区列表可从 APNIC 委派数据生成，例如 `hosts/.../gist-gateway/cn-allow.py` 把中国大陆 IPv4 与现有 `allow_only` 节点合并；这类数据是部署专有的，不放进通用源码。用 `caddy validate` 校验后平滑 reload，并实测允许与拒绝两侧。
+
+注意：
+
+- 地区列表会随 APNIC 委派变化，需定期重新生成并 reload；拒绝时返回 404，与无效分享一致。
+- 只对 `/s/*` 生效，管理后台仍用原有白名单，避免把登录页开放给整个地区。
+- 若域名没有 AAAA 记录，IPv4 列表即可；以后加 IPv6 时要同时补 IPv6 段。
+- 若站点经过 CDN 或其它反代，`remote_ip` 看到的是上一跳地址，需要改用可信转发头并确认来源，否则限制会失效或误伤。
+
 反代访问日志和运行时错误日志是两个通道，必须分别保护：
 
 - 新站点跳过访问日志，或者确保订阅的完整 URI 被删除。

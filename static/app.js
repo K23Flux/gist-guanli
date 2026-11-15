@@ -236,7 +236,7 @@
     if (!shares.length) {
       if (!state.sources.length) empty(content, '从一份 Gist 开始', '先添加一个 Gist 来源，再为文件创建独立的分享链接。', '添加 Gist 来源', () => sourceForm());
       else if (query || filter) empty(content, '没有匹配的分享', '试试其他关键词，或清除来源筛选。', '清除筛选', () => { $('#share-search').value = ''; $('#source-filter').value = ''; renderShares(); });
-      else empty(content, '为来源创建第一个分享', '选择已有来源，命名并设置有效期，就可以分发链接。', '新建分享', () => shareForm());
+      else empty(content, '为来源创建第一个分享', '命名并设置有效期，就可以分发链接。', '新建分享', () => shareForm());
       return;
     }
     const grid = table(['分享 / 路径', 'Gist 来源 / 文件', '状态', '访问记录', '操作']);
@@ -415,26 +415,50 @@
     });
     urls.focus();
   }
+  function safeFileName(value) {
+    const text = String(value || '');
+    return text.length > 0 && text.length <= 96 && !text.startsWith('.') && /^[A-Za-z0-9._-]+$/.test(text);
+  }
+  function pickShareSource() {
+    if (!openDialog('选择来源', '这条分享会返回所选 Gist 文件的内容。')) return;
+    const list = node('div', 'source-picker');
+    state.sources.forEach(item => list.append(button(`${item.name} / ${item.filename}`, 'button secondary', () => {
+      closeDialog(true); shareForm(null, item.id);
+    })));
+    $('#dialog-body').append(list);
+  }
   function shareForm(share = null, sourceId = null) {
     if (!state.sources.length) { switchView('sources'); sourceForm(); return; }
-    if (!openDialog(share ? '编辑分享链接' : '新建分享链接', '选择来源，再设置这个分享的名称、路径与有效期。')) return;
+    if (!share && sourceId == null && state.sources.length > 1) { pickShareSource(); return; }
+    const source = state.sources.find(item => item.id === (share ? share.source_id : sourceId)) || state.sources[0];
+    if (!source) { toast('请先选择来源', true); return; }
+    if (!openDialog(share ? '编辑分享链接' : '新建分享链接', `${source.name} / ${source.filename}`)) return;
     const form = mountForm();
-    const source = field(form, 'Gist 来源', 'source_id', { tag: 'select', required: true });
-    state.sources.forEach(item => source.append(new Option(`${item.name} / ${item.filename}`, String(item.id))));
-    source.value = String(share?.source_id ?? sourceId ?? state.sources[0].id);
     const label = field(form, '分享名称', 'label', { required: true, value: share?.label || '', placeholder: '例如：手机自用', maxLength: 120 });
     const row = node('div', 'form-row'); form.append(row);
     const slug = field(row, '链接路径', 'slug', { value: share?.slug || '', placeholder: '留空自动生成', help: '用于区分分享。不要填写密码或个人信息。' });
-    const filename = field(row, '下载文件名', 'filename', { value: share?.filename || '', placeholder: '沿用来源文件名', help: '仅改变下载时的名称，不改变 Gist 文件。' });
-    const expires = field(form, '到期时间', 'expires_at', { type: 'datetime-local', value: localTime(share?.expires_at), help: '使用当前设备时区；留空表示永久有效。' });
+    const defaultName = share ? share.filename : (safeFileName(source.filename) ? source.filename : '');
+    const filename = field(row, '下载文件名', 'filename', { value: defaultName || '', placeholder: '沿用来源文件名', help: '默认与来源文件同名，需要时可改；不改变 Gist 内容。' });
+    const expirySelect = field(form, '有效期', 'expiry', { tag: 'select', help: '默认永久有效；选择天数从保存时开始计算。' });
+    [['永久有效', ''], ['7 天', '7'], ['30 天', '30'], ['90 天', '90'], ['自定义时间…', 'custom']].forEach(([text, value]) => expirySelect.append(new Option(text, value)));
+    const expires = field(form, '到期时间', 'expires_at', { type: 'datetime-local', value: localTime(share?.expires_at), help: '使用当前设备时区。' });
+    const expiresWrap = expires.closest('.form-field');
+    if (share?.expires_at) { expirySelect.value = 'custom'; } else { expiresWrap.hidden = true; }
+    expirySelect.addEventListener('change', () => {
+      expiresWrap.hidden = expirySelect.value !== 'custom';
+      if (!expiresWrap.hidden) expires.focus();
+    });
     const enabled = checkbox(form, '启用这个分享', 'enabled', share ? share.enabled !== false : true);
     footer(form, share ? '保存分享' : '创建分享', async () => {
       let expiry = null;
-      if (expires.value) {
+      if (expirySelect.value === 'custom') {
+        if (!expires.value) throw new Error('请选择到期时间，或改为永久有效。');
         expiry = Math.floor(new Date(expires.value).getTime() / 1000);
-        if (!Number.isFinite(expiry) || expiry <= Date.now() / 1000) throw new Error('请选择未来的到期时间，或留空设为永久。');
+        if (!Number.isFinite(expiry) || expiry <= Date.now() / 1000) throw new Error('请选择未来的到期时间。');
+      } else if (expirySelect.value) {
+        expiry = Math.floor(Date.now() / 1000) + Number(expirySelect.value) * 86400;
       }
-      await api(share ? sharePath(share.id) : '/api/admin/shares', share ? 'PUT' : 'POST', { source_id: Number(source.value), label: label.value.trim(), slug: slug.value.trim(), filename: filename.value.trim(), expires_at: expiry, enabled: enabled.checked });
+      await api(share ? sharePath(share.id) : '/api/admin/shares', share ? 'PUT' : 'POST', { source_id: Number(source.id), label: label.value.trim(), slug: slug.value.trim(), filename: filename.value.trim(), expires_at: expiry, enabled: enabled.checked });
       closeDialog(true); toast(share ? '分享已保存' : '分享已创建，点击“查看链接”获取地址'); await loadState();
     });
     label.focus();
