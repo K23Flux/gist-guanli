@@ -239,7 +239,7 @@
       else empty(content, '为来源创建第一个分享', '命名并设置有效期，就可以分发链接。', '新建分享', () => shareForm());
       return;
     }
-    const grid = table(['分享 / 路径', 'Gist 来源 / 文件', '状态', '访问记录', '操作']);
+    const grid = table(['分享 / 路径', 'Gist 来源 / 文件', '状态', '拉取记录', '操作']);
     shares.forEach(share => {
       const row = node('tr');
       const name = cell(row, '分享 / 路径');
@@ -250,8 +250,14 @@
       const expired = share.expires_at != null && Number(share.expires_at) <= Date.now() / 1000;
       const enabled = share.enabled !== false;
       status.append(node('span', `badge${expired ? ' bad' : !enabled ? ' neutral' : ''}`, expired ? '已到期' : enabled ? '使用中' : '已暂停'), node('p', 'status-note', share.expires_at ? `到期 ${formatTime(share.expires_at)}` : '永久有效'));
-      const activity = cell(row, '访问记录');
-      activity.append(node('div', 'cell-title', `${Number(share.access_count) || 0} 次访问`), node('div', 'cell-detail', share.last_access ? formatTime(share.last_access) : '尚未访问'));
+      const activity = cell(row, '拉取记录');
+      const lastAt = share.last_fetch ?? share.last_access;
+      activity.append(
+        node('div', 'cell-title', `${Number(share.access_count) || 0} 次访问`),
+        node('div', 'cell-detail', lastAt ? `最近成功 ${formatTime(lastAt)}` : '尚未成功拉取'),
+        node('div', 'cell-detail', share.last_ip ? `IP ${share.last_ip}` : (lastAt ? 'IP 未记录' : '')),
+        button('最近 30 次', 'text-button', () => showFetches(share))
+      );
       const actions = node('div', 'row-actions');
       const reveal = button('查看链接', 'text-button', () => revealShare(share, reveal));
       actions.append(reveal, menu([
@@ -503,6 +509,37 @@
         input.focus(); input.select();
       } catch (error) { toast(errorText(error), true); }
     }, '读取中…');
+  }
+  async function showFetches(share) {
+    if (!openDialog('最近拉取记录', `${share.label || '未命名分享'} · 最近 30 次`)) return;
+    const content = node('div', 'fetch-body');
+    content.append(node('p', 'loading-placeholder', '正在读取…'));
+    $('#dialog-body').append(content);
+    try {
+      const data = await api(`${sharePath(share.id)}/fetches`);
+      if (!Array.isArray(data.fetches)) throw new Error('拉取记录格式有误，请稍后重试。');
+      content.replaceChildren();
+      if (!data.fetches.length) {
+        content.append(node('p', 'fetch-empty', '升级后还没有成功拉取记录。'));
+      } else {
+        const list = node('div', 'fetch-list');
+        data.fetches.forEach(item => {
+          const row = node('div', 'fetch-item');
+          row.append(node('time', '', formatTime(item.fetched_at)), node('span', '', item.ip || 'IP 未记录'));
+          list.append(row);
+        });
+        content.append(list);
+      }
+      content.append(node('p', 'field-help', '仅记录成功返回的订阅拉取，每个分享最多保留 30 条；IP 仅管理员可见。经 sub-jp/sub-jp2 的记录为 JP 入口 IP，直连域名才记录客户端 IP。'));
+      const actions = node('div', 'dialog-footer');
+      actions.append(button('关闭', 'button secondary', () => closeDialog()));
+      content.append(actions);
+    } catch (error) {
+      content.replaceChildren(node('p', 'form-error', errorText(error)));
+      const actions = node('div', 'dialog-footer');
+      actions.append(button('关闭', 'button secondary', () => closeDialog()));
+      content.append(actions);
+    }
   }
 
   document.querySelectorAll('[data-secret-target]').forEach(toggle => toggle.addEventListener('click', () => {

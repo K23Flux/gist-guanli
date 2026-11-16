@@ -77,6 +77,15 @@ pub struct Share {
     pub last_access: Option<i64>,
     pub access_count: i64,
     pub source_name: String,
+    #[sqlx(default)]
+    pub last_fetch: Option<i64>,
+    #[sqlx(default)]
+    pub last_ip: Option<String>,
+}
+#[derive(Serialize, FromRow, Clone)]
+pub struct ShareFetch {
+    pub fetched_at: i64,
+    pub ip: Option<String>,
 }
 #[derive(Serialize, FromRow, Clone)]
 pub struct Settings {
@@ -216,6 +225,30 @@ impl App {
         let entry = stats.entry(id).or_insert((0, 0));
         entry.0 += 1;
         entry.1 = now();
+    }
+    pub async fn record_fetch(&self, id: i64, ip: Option<&str>) {
+        let Ok(mut tx) = self.db.begin().await else {
+            return;
+        };
+        let at = now();
+        if sqlx::query("INSERT INTO share_fetches(share_id,fetched_at,ip) VALUES(?,?,?)")
+            .bind(id)
+            .bind(at)
+            .bind(ip)
+            .execute(&mut *tx)
+            .await
+            .is_err()
+        {
+            return;
+        }
+        let _ = sqlx::query(
+            "DELETE FROM share_fetches WHERE share_id=? AND id < (SELECT id FROM share_fetches WHERE share_id=? ORDER BY id DESC LIMIT 1 OFFSET 29)",
+        )
+        .bind(id)
+        .bind(id)
+        .execute(&mut *tx)
+        .await;
+        let _ = tx.commit().await;
     }
     pub async fn record_health(&self, id: i64, version: i64, success: bool) {
         let mut health = self.health.lock().await;

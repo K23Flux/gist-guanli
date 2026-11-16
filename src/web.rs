@@ -1,6 +1,6 @@
 use crate::{
     config, crypto,
-    store::{self, App, Grant, Share, Source},
+    store::{self, App, Grant, Share, ShareFetch, Source},
     upstream::GistRef,
 };
 use askama::Template;
@@ -120,6 +120,7 @@ pub fn router(app: App) -> Router {
         .route("/api/admin/shares/{id}/rotate", post(rotate_share))
         .route("/api/admin/shares/{id}/reveal", post(reveal_share))
         .route("/api/admin/shares/{id}/qr", get(qr_share))
+        .route("/api/admin/shares/{id}/fetches", get(share_fetches))
         .route("/api/admin/settings", put(update_settings))
         .route("/api/admin/credentials", post(change_secret))
         .route("/s/{slug}/{token}/{filename}", get(subscription))
@@ -361,7 +362,7 @@ async fn dashboard(State(app): State<App>, headers: HeaderMap) -> ApiResult<Resp
 async fn admin_state(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     let csrf = authenticated(&app, &headers).await?;
     let sources:Vec<Source>=sqlx::query_as("SELECT s.*,(SELECT COUNT(*) FROM shares sh WHERE sh.source_id=s.id) AS share_count FROM sources s ORDER BY s.id DESC").fetch_all(&app.db).await?;
-    let shares:Vec<Share>=sqlx::query_as("SELECT sh.id,sh.source_id,sh.label,sh.slug,sh.filename,sh.enabled,sh.expires_at,sh.last_access,sh.access_count,s.name AS source_name FROM shares sh JOIN sources s ON s.id=sh.source_id ORDER BY sh.id DESC").fetch_all(&app.db).await?;
+    let shares:Vec<Share>=sqlx::query_as("SELECT sh.id,sh.source_id,sh.label,sh.slug,sh.filename,sh.enabled,sh.expires_at,sh.last_access,sh.access_count,s.name AS source_name,(SELECT f.fetched_at FROM share_fetches f WHERE f.share_id=sh.id ORDER BY f.id DESC LIMIT 1) AS last_fetch,(SELECT f.ip FROM share_fetches f WHERE f.share_id=sh.id ORDER BY f.id DESC LIMIT 1) AS last_ip FROM shares sh JOIN sources s ON s.id=sh.source_id ORDER BY sh.id DESC").fetch_all(&app.db).await?;
     let settings = app.settings().await?;
     let (bytes, entries) = app.upstream.usage().await;
     Ok(Json(
@@ -783,6 +784,27 @@ async fn qr_share(
         .build();
     Ok(([(header::CONTENT_TYPE, "image/svg+xml")], svg).into_response())
 }
+async fn share_fetches(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    authenticated(&app, &headers).await?;
+    let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM shares WHERE id=?")
+        .bind(id)
+        .fetch_optional(&app.db)
+        .await?;
+    if exists.is_none() {
+        return Err(missing());
+    }
+    let fetches: Vec<ShareFetch> = sqlx::query_as(
+        "SELECT fetched_at,ip FROM share_fetches WHERE share_id=? ORDER BY id DESC LIMIT 30",
+    )
+    .bind(id)
+    .fetch_all(&app.db)
+    .await?;
+    Ok(Json(json!({"share_id":id,"fetches":fetches})))
+}
 #[derive(Deserialize)]
 struct SettingsInput {
     base_url: String,
@@ -893,6 +915,7 @@ async fn authorized_source(
 async fn subscription(
     State(app): State<App>,
     Path((slug, token, filename)): Path<(String, String, String)>,
+    headers: HeaderMap,
 ) -> ApiResult<Response> {
     if slug.len() > 64 || token.len() != 43 || filename.len() > 96 {
         return Err(missing());
@@ -931,6 +954,16 @@ async fn subscription(
         ));
     }
     app.record(grant.id).await;
+    let client = client_key(&headers, app.trust_proxy);
+    app.record_fetch(
+        grant.id,
+        if client == "direct" {
+            None
+        } else {
+            Some(client.as_str())
+        },
+    )
+    .await;
     // Bound simultaneous responses as well as upstream fetches. Hold the permit
     // while streaming small frames instead of cloning complete config bodies.
     let stream =

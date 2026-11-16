@@ -366,6 +366,104 @@ async fn cached_content_is_exact_and_never_bypasses_revocation() {
 }
 
 #[tokio::test]
+async fn successful_fetches_keep_last_30_and_record_client_ip() {
+    let (_dir, mut app, session, csrf) = fixture().await;
+    app.trust_proxy = true;
+    let src = source(&app).await;
+    let id = create(&app, &session, &csrf, src, "history").await;
+    let source = app.source(src).await.unwrap().unwrap();
+    let expected = bytes::Bytes::from_static(b"test");
+    app.upstream
+        .seed_for_test(src, source.version, source.gist(), expected.clone())
+        .await;
+    let link = app.link(id).await.unwrap().unwrap();
+    let path = url::Url::parse(&link).unwrap().path().to_string();
+    for i in 0..35 {
+        let ip = format!("203.0.113.{}", i + 1);
+        let r = router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(&path)
+                    .header("x-forwarded-for", ip)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(r.into_body().collect().await.unwrap().to_bytes(), expected);
+    }
+    let rows: Vec<(i64, Option<String>)> =
+        sqlx::query_as("SELECT fetched_at,ip FROM share_fetches WHERE share_id=? ORDER BY id DESC")
+            .bind(id)
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(rows.len(), 30);
+    assert_eq!(rows[0].1.as_deref(), Some("203.0.113.35"));
+    let r = router(app.clone())
+        .oneshot(request(
+            "GET",
+            &format!("/api/admin/shares/{id}/fetches"),
+            &session,
+            &csrf,
+            json!(null),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let data = value(r).await;
+    assert_eq!(data["fetches"].as_array().unwrap().len(), 30);
+    assert_eq!(data["fetches"][0]["ip"], "203.0.113.35");
+    let r = router(app.clone())
+        .oneshot(request(
+            "GET",
+            "/api/admin/state",
+            &session,
+            &csrf,
+            json!(null),
+        ))
+        .await
+        .unwrap();
+    let data = value(r).await;
+    assert_eq!(data["shares"][0]["last_ip"], "203.0.113.35");
+    assert!(data["shares"][0]["last_fetch"].as_i64().unwrap() > 0);
+    let r = router(app.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/admin/shares/{id}/fetches"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    let r = router(app.clone())
+        .oneshot(request(
+            "POST",
+            &format!("/api/admin/shares/{id}/rotate"),
+            &session,
+            &csrf,
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let r = router(app.clone())
+        .oneshot(Request::builder().uri(&path).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM share_fetches WHERE share_id=?")
+        .bind(id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(count, 30);
+    app.db.close().await;
+}
+
+#[tokio::test]
 async fn blank_share_paths_receive_safe_defaults() {
     let (_dir, app, session, csrf) = fixture().await;
     let src = source(&app).await;

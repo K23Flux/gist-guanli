@@ -2,6 +2,15 @@
 
 日期：2026-11-14。环境：Windows 11 x86_64，Rust 1.100.0，GNU 工具链，原生 release 二进制；只绑定 127.0.0.1:4387。没有登录服务器或部署。
 
+## 2026-11-16 增量：分享拉取记录与 IP
+
+- 新增 SQLite 迁移 `0002_share_fetches.sql`：成功返回订阅时写入 `fetched_at` 和反代看到的客户端 IP；每个分享只保留最近 30 条，删除分享时级联删除。已有数据库启动时自动应用迁移，升级前的旧 `last_access` 不补造 IP。
+- 管理页每条分享显示最近成功时间、最近 IP 和“最近 30 次”入口；详情弹窗显示最近 30 次成功拉取的时间和 IP，仅管理员会话可读取。经 TCP 透传的加速入口只能记录入口节点 IP，直连域名记录客户端 IP。
+- 本地端到端：临时数据目录、公开代码 Gist 样本，带两个不同 `X-Forwarded-For` 请求均 200；`/api/admin/state` 返回最新 `last_fetch`/`last_ip`，`/api/admin/shares/{id}/fetches` 返回两条记录；无会话访问该接口 401。
+- 自动测试：`cargo test --release --locked` 28 passed，0 failed；新增测试覆盖 35 次拉取只保留 30 条、最新 IP、接口 30 条上限、未登录 401、重置令牌后的失败请求不写入。
+- `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`node --check static/app.js` 通过。Linux 交叉构建：静态 ELF 5,170,400 字节，SHA-256 `ca7e84f73cdc27908a273f2f115c9a118e5fc8e7abfbeac3b6e5c59da5311ca9`。
+- 已在受控 Linux 主机部署并验证：迁移自动应用、服务 active、数据库 integrity_check=ok；三个入口的临时分享拉取均 200，伪造 `X-Forwarded-For` 未进入记录，临时分享删除后级联记录为 0。具体主机、备份路径和入口 IP 见私有运维记录。
+
 ## 构建与自动校验
 
 | 检查 | 结果 |
