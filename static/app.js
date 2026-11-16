@@ -252,10 +252,12 @@
       status.append(node('span', `badge${expired ? ' bad' : !enabled ? ' neutral' : ''}`, expired ? '已到期' : enabled ? '使用中' : '已暂停'), node('p', 'status-note', share.expires_at ? `到期 ${formatTime(share.expires_at)}` : '永久有效'));
       const activity = cell(row, '拉取记录');
       const lastAt = share.last_fetch ?? share.last_access;
+      const hasFetch = share.last_fetch != null;
+      const lastLabel = hasFetch ? '最近成功' : (lastAt ? '升级前最近访问' : '');
       activity.append(
         node('div', 'cell-title', `${Number(share.access_count) || 0} 次访问`),
-        node('div', 'cell-detail', lastAt ? `最近成功 ${formatTime(lastAt)}` : '尚未成功拉取'),
-        node('div', 'cell-detail', share.last_ip ? `IP ${share.last_ip}` : (lastAt ? 'IP 未记录' : '')),
+        node('div', 'cell-detail', lastAt ? `${lastLabel} ${formatTime(lastAt)}` : '尚未成功拉取'),
+        node('div', 'cell-detail', share.last_ip ? `IP ${share.last_ip}` : (hasFetch ? 'IP 未记录' : (lastAt ? '升级前无 IP' : ''))),
         button('最近 30 次', 'text-button', () => showFetches(share))
       );
       const actions = node('div', 'row-actions');
@@ -520,7 +522,7 @@
       if (!Array.isArray(data.fetches)) throw new Error('拉取记录格式有误，请稍后重试。');
       content.replaceChildren();
       if (!data.fetches.length) {
-        content.append(node('p', 'fetch-empty', '升级后还没有成功拉取记录。'));
+        content.append(node('p', 'fetch-empty', '升级后还没有成功拉取记录；升级前的访问没有 IP，无法补录。'));
       } else {
         const list = node('div', 'fetch-list');
         data.fetches.forEach(item => {
